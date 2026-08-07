@@ -12,7 +12,7 @@
     <div class="brand">
       <img class="logo-circle" src="/logo.png" alt="Martinsburg-Berkeley County Parks and Recreation logo" />
       <div>
-        <p class="title">Facility dashboard</p>
+        <p class="title">Facility Dashboard</p>
         <p class="subtitle" id="today"></p>
       </div>
     </div>
@@ -24,9 +24,7 @@
     <p class="notice-text"></p>
   </div>
 
-  <div class="overdue-alert" id="overdue-alert">
-    <span id="overdue-alert-text"></span>
-  </div>
+  <p class="overdue-text" id="overdue-alert"></p>
 
   <div class="receiver-grid">
     <div>
@@ -53,7 +51,7 @@
 
     <div>
       <p class="section-label">Task lists</p>
-      <div class="task-grid" id="task-grid" data-include-reports="true" style="grid-template-columns:1fr;"></div>
+      <div class="task-grid" id="task-grid" data-include-reports="true"></div>
     </div>
   </div>
 </div>
@@ -69,23 +67,31 @@ function setStatus(online) {
   text.textContent = online ? 'connected' : 'reconnecting';
 }
 
+function updateOverdueAlert(tasks) {
+  const overdueNames = tasks
+    .filter((t) => (t.id === 'chem' || t.id === 'bathroom') && t.overdue)
+    .map((t) => t.title);
+  const alertText = document.getElementById('overdue-alert');
+  if (overdueNames.length) {
+    alertText.textContent = overdueNames.length === 1 ? `${overdueNames[0]} is past due` : `${overdueNames.join(' and ')} are past due`;
+    alertText.classList.add('showing');
+    document.body.classList.add('overdue-flash');
+  } else {
+    alertText.classList.remove('showing');
+    document.body.classList.remove('overdue-flash');
+  }
+}
+
 async function refreshTasks() {
   const grid = document.getElementById('task-grid');
   const res = await apiFetch('/api/tasks');
   const tasks = await res.json();
-  renderTaskGrid(grid, tasks, { includeReports: true });
 
-  const overdueNames = tasks
-    .filter((t) => (t.id === 'chem' || t.id === 'bathroom') && t.overdue)
-    .map((t) => t.title);
-  const alertBox = document.getElementById('overdue-alert');
-  if (overdueNames.length) {
-    document.getElementById('overdue-alert-text').textContent =
-      overdueNames.length === 1 ? `${overdueNames[0]} is past due` : `${overdueNames.join(' and ')} are past due`;
-    alertBox.classList.add('showing');
-  } else {
-    alertBox.classList.remove('showing');
-  }
+  const cols = Math.max(1, Math.ceil(tasks.length / 2));
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+  renderTaskGrid(grid, tasks, { includeReports: true, onAfterSubmit: refreshTasks });
+  updateOverdueAlert(tasks);
 }
 
 function handleReceiverMessage(e) {

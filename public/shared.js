@@ -202,7 +202,7 @@ function formatDue(task) {
   return `Next due ${new Date(task.dueAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 }
 
-function renderTaskGrid(containerEl, tasks, { includeReports = true, showHistory = false } = {}) {
+function renderTaskGrid(containerEl, tasks, { includeReports = true, showHistory = false, onAfterSubmit = null } = {}) {
   containerEl.innerHTML = '';
   tasks
     .filter((t) => includeReports || t.type !== 'report')
@@ -221,7 +221,7 @@ function renderTaskGrid(containerEl, tasks, { includeReports = true, showHistory
           openTaskHistoryPopup(task);
           return;
         }
-        openTaskPopup(task, containerEl);
+        openTaskPopup(task, containerEl, onAfterSubmit);
       });
       containerEl.appendChild(card);
     });
@@ -279,7 +279,7 @@ async function openTaskHistoryPopup(task) {
   overlay.querySelector('.close-btn').addEventListener('click', () => overlay.remove());
 }
 
-function openTaskPopup(task, gridEl) {
+function openTaskPopup(task, gridEl, onAfterSubmit = null) {
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
 
@@ -344,7 +344,9 @@ function openTaskPopup(task, gridEl) {
     const endpoint = task.id === 'incident' ? '/api/incidents' : task.id === 'referral' ? '/api/referrals' : `/api/tasks/${task.id}/submit`;
     await apiFetch(endpoint, { method: 'POST', body: JSON.stringify({ values }) });
     overlay.remove();
-    if (gridEl) {
+    if (onAfterSubmit) {
+      onAfterSubmit();
+    } else if (gridEl) {
       const res = await apiFetch('/api/tasks');
       renderTaskGrid(gridEl, await res.json(), { includeReports: gridEl.dataset.includeReports !== 'false' });
     }

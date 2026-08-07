@@ -1,6 +1,6 @@
 [
-  { "id": "senior", "label": "Senior Swim" },
-  { "id": "kids", "label": "Kids Party" },
-  { "id": "Day Shift", "label": "Day Shift" },
+  { "id": "summer-mix", "label": "Summer mix" },
+  { "id": "lifeguard-picks", "label": "Lifeguard picks" },
+  { "id": "chill-afternoon", "label": "Chill afternoon" },
   { "id": "throwbacks", "label": "Throwbacks" }
 ]

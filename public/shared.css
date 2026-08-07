@@ -30,9 +30,9 @@ body {
 }
 
 .app {
-  max-width: 720px;
+  max-width: 1040px;
   margin: 0 auto;
-  padding: 1.25rem 1rem 4rem;
+  padding: 1.25rem 1.25rem 2.5rem;
 }
 
 .header {
@@ -91,7 +91,7 @@ body {
 .logs-panel .log-row { padding: 8px 0; border-bottom: 1px solid var(--border); }
 .logs-panel .log-row:last-child { border-bottom: none; }
 
-.header .title { font-size: 17px; font-weight: 600; margin: 0; }
+.header .title { font-size: 20px; font-weight: 600; margin: 0; }
 .header .subtitle { font-size: 13px; color: var(--text-secondary); margin: 2px 0 0; }
 
 .status-dot {
@@ -238,26 +238,21 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .log-row .log-meta { font-size: 12px; color: var(--text-muted); margin: 2px 0 0; }
 
 @keyframes overdue-flash {
-  0%, 100% { background: var(--danger-bg); border-color: #eec6c6; }
-  50% { background: var(--surface-2); border-color: var(--border); }
+  0%, 100% { background: var(--danger-bg); }
+  50% { background: var(--surface-0); }
 }
-.overdue-alert {
-  display: none;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid #eec6c6;
-  border-radius: 12px;
-  padding: 0.85rem 1rem;
-  margin-bottom: 1.25rem;
-  font-size: 14px;
+body.overdue-flash { animation: overdue-flash 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  body.overdue-flash { animation: none; background: var(--danger-bg); }
+}
+.overdue-text {
+  font-size: 15px;
   font-weight: 600;
   color: var(--danger);
-  animation: overdue-flash 1.2s ease-in-out infinite;
+  margin: 0 0 1.25rem;
+  display: none;
 }
-.overdue-alert.showing { display: flex; }
-@media (prefers-reduced-motion: reduce) {
-  .overdue-alert { animation: none; background: var(--danger-bg); }
-}
+.overdue-text.showing { display: block; }
 
 .access-gate {
   max-width: 320px; margin: 4rem auto; text-align: center;
