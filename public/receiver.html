@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Receiver — MBCPR Dashboard</title>
+<link rel="stylesheet" href="/shared.css" />
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <div class="brand">
+      <img class="logo-circle" src="/logo.png" alt="Martinsburg-Berkeley County Parks and Recreation logo" />
+      <div>
+        <p class="title">Receiver</p>
+        <p class="subtitle">Leave this page open — this device plays the audio</p>
+      </div>
+    </div>
+    <span class="status-dot" id="status"><span class="dot"></span><span id="status-text">connecting</span></span>
+  </div>
+
+  <div class="receiver-grid">
+    <div>
+      <p class="section-label">Now playing</p>
+      <div class="now-playing-box">
+        <p class="name" id="now-playing">Nothing playing</p>
+        <p class="meta" id="now-zone">-</p>
+      </div>
+
+      <div class="slider-row">
+        <div class="row-top"><label>Music volume</label><span class="value" id="music-vol-val">70</span></div>
+        <input type="range" id="music-vol" min="0" max="100" value="70" />
+      </div>
+      <div class="slider-row">
+        <div class="row-top"><label>Mic</label><span class="value" id="mic-vol-val">70</span></div>
+        <input type="range" id="mic-vol" min="0" max="100" value="70" />
+      </div>
+      <div class="slider-row">
+        <div class="row-top"><label>Amplify mic</label><span class="value" id="mic-amp-val">20</span></div>
+        <input type="range" id="mic-amp" min="0" max="100" value="20" />
+      </div>
+
+      <p style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;">
+        Pick the parent folder that contains one subfolder per playlist
+        (e.g. <code>summer-mix</code>, <code>lifeguard-picks</code>). Files play straight off
+        this PC — nothing is uploaded.
+      </p>
+      <button class="primary" id="pick-folder">Connect playlist</button>
+    </div>
+
+    <div>
+      <p class="section-label">Logs</p>
+      <div class="logs-panel" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/shared.js"></script>
+<script>
+let folderHandle = null;
+let playlistFiles = {};
+let musicAudio = new Audio();
+let musicPanner, musicGain, musicSource, musicCtx;
+let clipCtx;
+let currentPlaylist = null;
+let currentZone = 'both';
+let stopRequested = false;
+
+let musicVolLevel = 0.7;
+let micVolLevel = 0.7;
+let micAmpLevel = 0.2;
+
+document.getElementById('music-vol').addEventListener('input', (e) => {
+  musicVolLevel = e.target.value / 100;
+  document.getElementById('music-vol-val').textContent = e.target.value;
+  if (musicGain) musicGain.gain.value = musicVolLevel;
+});
+document.getElementById('mic-vol').addEventListener('input', (e) => {
+  micVolLevel = e.target.value / 100;
+  document.getElementById('mic-vol-val').textContent = e.target.value;
+});
+document.getElementById('mic-amp').addEventListener('input', (e) => {
+  micAmpLevel = e.target.value / 100;
+  document.getElementById('mic-amp-val').textContent = e.target.value;
+});
+
+function log(msg) {
+  const el = document.getElementById('log');
+  const row = document.createElement('div');
+  row.className = 'log-row';
+  row.innerHTML = `<p class="log-title" style="margin:0;font-size:13px;">${msg}</p><p class="log-meta" style="margin:2px 0 0;font-size:11px;color:var(--text-muted);">${new Date().toLocaleTimeString()}</p>`;
+  el.prepend(row);
+  while (el.children.length > 25) el.removeChild(el.lastChild);
+}
+
+function zoneToPan(zone) {
+  if (zone === 'pool') return -1;
+  if (zone === 'poolhouse') return 1;
+  return 0;
+}
+
+document.getElementById('pick-folder').addEventListener('click', async () => {
+  try {
+    folderHandle = await window.showDirectoryPicker();
+    playlistFiles = {};
+    for await (const [name, handle] of folderHandle.entries()) {
+      if (handle.kind === 'directory') {
+        const files = [];
+        for await (const [fname, fhandle] of handle.entries()) {
+          if (fhandle.kind === 'file' && /\.(mp3|wav|m4a|ogg)$/i.test(fname)) files.push(fhandle);
+        }
+        playlistFiles[name] = files;
+      }
+    }
+    log(`Loaded folders: ${Object.keys(playlistFiles).join(', ') || 'none found'}`);
+  } catch (e) {
+    log('Folder selection cancelled or failed.');
+  }
+});
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+async function playNextTrack(queue, idx, playlistId, zone) {
+  if (stopRequested || currentPlaylist !== playlistId) return;
+  if (idx >= queue.length) {
+    queue = shuffle(playlistFiles[playlistId] || []);
+    idx = 0;
+    if (!queue.length) return;
+  }
+  const fileHandle = queue[idx];
+  const file = await fileHandle.getFile();
+  const url = URL.createObjectURL(file);
+  musicAudio.src = url;
+  musicAudio.onended = () => playNextTrack(queue, idx + 1, playlistId, zone);
+  await musicAudio.play().catch(() => {});
+  document.getElementById('now-playing').textContent = `${playlistId} — ${file.name}`;
+  document.getElementById('now-zone').textContent = `Zone: ${zone}`;
+}
+
+async function startPlaylist(playlistId, zone, mode) {
+  if (!playlistFiles[playlistId] || !playlistFiles[playlistId].length) {
+    log(`No files found for "${playlistId}" — connect the playlist folder first.`);
+    return;
+  }
+  ensureMusicGraph();
+  musicPanner.pan.value = zoneToPan(zone);
+  musicGain.gain.value = musicVolLevel;
+  currentPlaylist = playlistId;
+  currentZone = zone;
+  stopRequested = false;
+  const queue = shuffle(playlistFiles[playlistId]);
+  log(`Playing "${playlistId}" to ${zone} (shuffle, loop)`);
+  playNextTrack(queue, 0, playlistId, zone);
+}
+
+function stopPlaylist() {
+  stopRequested = true;
+  currentPlaylist = null;
+  musicAudio.pause();
+  document.getElementById('now-playing').textContent = 'Nothing playing';
+  document.getElementById('now-zone').textContent = '-';
+  log('Music stopped');
+}
+
+function ensureMusicGraph() {
+  if (musicSource) return;
+  musicCtx = musicCtx || new (window.AudioContext || window.webkitAudioContext)();
+  musicSource = musicCtx.createMediaElementSource(musicAudio);
+  musicGain = musicCtx.createGain();
+  musicGain.gain.value = musicVolLevel;
+  musicPanner = musicCtx.createStereoPanner();
+  musicSource.connect(musicGain).connect(musicPanner).connect(musicCtx.destination);
+}
+
+const ZONE_NAME = { 0: 'pool', 1: 'poolhouse', 2: 'both' };
+
+async function playClip(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const mimeLen = bytes[0];
+  const mime = new TextDecoder().decode(bytes.slice(1, 1 + mimeLen));
+  const zoneByte = bytes[1 + mimeLen];
+  const audioBytes = bytes.slice(2 + mimeLen);
+  const zone = ZONE_NAME[zoneByte] || 'both';
+
+  clipCtx = clipCtx || new (window.AudioContext || window.webkitAudioContext)();
+  const blob = new Blob([audioBytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const audioEl = new Audio(url);
+  const source = clipCtx.createMediaElementSource(audioEl);
+  const gain = clipCtx.createGain();
+  gain.gain.value = micVolLevel * (1 + micAmpLevel * 4);
+  const compressor = clipCtx.createDynamicsCompressor();
+  const panner = clipCtx.createStereoPanner();
+  panner.pan.value = zoneToPan(zone);
+  source.connect(gain).connect(compressor).connect(panner).connect(clipCtx.destination);
+  audioEl.play();
+  log(`Push-to-talk clip played (${zone})`);
+}
+
+function setStatus(online) {
+  const el = document.getElementById('status');
+  const text = document.getElementById('status-text');
+  el.classList.toggle('online', online);
+  text.textContent = online ? 'connected' : 'reconnecting';
+}
+
+ensureAccessCode().then((code) => {
+  const sock = connectWS('receiver', () => setStatus(true));
+  sock.addEventListener('close', () => setStatus(false));
+  sock.addEventListener('message', (e) => {
+    if (typeof e.data === 'string') {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'play') startPlaylist(msg.playlist, msg.zone, msg.mode);
+      if (msg.type === 'stop') stopPlaylist();
+    } else {
+      playClip(e.data);
+    }
+  });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Facility Dashboard — Lifeguard</title>
+<link rel="stylesheet" href="/shared.css" />
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <div class="brand">
+      <img class="logo-circle" src="/logo.png" alt="Martinsburg-Berkeley County Parks and Recreation logo" />
+      <div>
+        <p class="title">Facility dashboard</p>
+        <p class="subtitle" id="today"></p>
+      </div>
+    </div>
+    <span class="status-dot" id="status"><span class="dot"></span><span id="status-text">connecting</span></span>
+  </div>
+
+  <div class="notice hidden" id="notice">
+    <div class="label">Notice for today</div>
+    <p class="notice-text"></p>
+  </div>
+
+  <div class="action-grid">
+    <button class="action-btn" id="mic-btn">Announce</button>
+    <button class="action-btn" id="music-btn">Music</button>
+  </div>
+
+  <p class="section-label">Task lists</p>
+  <div class="task-grid" id="task-grid" data-include-reports="true"></div>
+</div>
+
+<script src="/shared.js"></script>
+<script>
+document.getElementById('today').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+
+function setStatus(online) {
+  const el = document.getElementById('status');
+  const text = document.getElementById('status-text');
+  el.classList.toggle('online', online);
+  text.textContent = online ? 'connected' : 'reconnecting';
+}
+
+async function refreshTasks() {
+  const grid = document.getElementById('task-grid');
+  const res = await apiFetch('/api/tasks');
+  renderTaskGrid(grid, await res.json(), { includeReports: true });
+}
+
+ensureAccessCode().then(async (code) => {
+  connectWS('guard', () => setStatus(true)).addEventListener('close', () => setStatus(false));
+  wirePushToTalk(document.getElementById('mic-btn'), 'both');
+  document.getElementById('music-btn').addEventListener('click', openMusicPopup);
+  await loadNotice(document.getElementById('notice'));
+  refreshTasks();
+  setInterval(refreshTasks, 60000);
+});
+</script>
+</body>
+</html>
