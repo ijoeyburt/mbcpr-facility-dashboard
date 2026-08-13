@@ -329,6 +329,16 @@ function applyRemoteVolume(target, value) {
     micAmpLevel = value;
     document.getElementById('mic-amp').value = pct;
     document.getElementById('mic-amp-val').textContent = pct;
+  } else if (target === 'poolChannel') {
+    poolChanLevel = value;
+    if (poolGain) poolGain.gain.value = poolChanLevel;
+    document.getElementById('pool-chan').value = pct;
+    document.getElementById('pool-chan-val').textContent = pct;
+  } else if (target === 'poolhouseChannel') {
+    poolhouseChanLevel = value;
+    if (poolhouseGain) poolhouseGain.gain.value = poolhouseChanLevel;
+    document.getElementById('poolhouse-chan').value = pct;
+    document.getElementById('poolhouse-chan-val').textContent = pct;
   }
 }
 

@@ -43,6 +43,15 @@
         <input type="range" id="mic-vol" min="0" max="100" value="70" />
       </div>
 
+      <div class="slider-row">
+        <div class="row-top"><label>Pool channel volume</label><span class="value" id="pool-chan-val">100</span></div>
+        <input type="range" id="pool-chan" min="0" max="100" value="100" />
+      </div>
+      <div class="slider-row" style="margin-bottom:1.5rem;">
+        <div class="row-top"><label>Pool house channel volume</label><span class="value" id="poolhouse-chan-val">100</span></div>
+        <input type="range" id="poolhouse-chan" min="0" max="100" value="100" />
+      </div>
+
       <div class="action-grid" style="grid-template-columns:1fr 1fr;">
         <button class="action-btn" id="mic-btn">Announce</button>
         <button class="action-btn" id="music-btn">Music</button>
@@ -118,6 +127,14 @@ ensureAccessCode().then(async (code) => {
   document.getElementById('mic-vol').addEventListener('input', (e) => {
     document.getElementById('mic-vol-val').textContent = e.target.value;
     sendControlMessage({ type: 'setVolume', target: 'mic', value: e.target.value / 100 });
+  });
+  document.getElementById('pool-chan').addEventListener('input', (e) => {
+    document.getElementById('pool-chan-val').textContent = e.target.value;
+    sendControlMessage({ type: 'setVolume', target: 'poolChannel', value: e.target.value / 100 });
+  });
+  document.getElementById('poolhouse-chan').addEventListener('input', (e) => {
+    document.getElementById('poolhouse-chan-val').textContent = e.target.value;
+    sendControlMessage({ type: 'setVolume', target: 'poolhouseChannel', value: e.target.value / 100 });
   });
 
   await loadNotice(document.getElementById('notice'));
