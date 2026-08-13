@@ -112,10 +112,10 @@ function ensureAudioGraph() {
   merger = rxCtx.createChannelMerger(2);
 
   mixBus.connect(splitter);
-  splitter.connect(poolGain, 0);
-  splitter.connect(poolhouseGain, 1);
-  poolGain.connect(merger, 0, 0);
-  poolhouseGain.connect(merger, 0, 1);
+  splitter.connect(poolGain, 1);      // pool now pans to the right channel
+  splitter.connect(poolhouseGain, 0); // pool house now pans to the left channel
+  poolGain.connect(merger, 0, 1);
+  poolhouseGain.connect(merger, 0, 0);
   merger.connect(rxCtx.destination);
 
   graphReady = true;
@@ -205,10 +205,14 @@ document.getElementById('pick-folder').addEventListener('click', async () => {
     folderHandle = await window.showDirectoryPicker();
     playlistFiles = {};
     for await (const [name, handle] of folderHandle.entries()) {
-      if (handle.kind === 'directory') {
+      if (handle.kind === 'directory' && !name.startsWith('.')) {
         const files = [];
         for await (const [fname, fhandle] of handle.entries()) {
-          if (fhandle.kind === 'file' && /\.(mp3|wav|m4a|ogg)$/i.test(fname)) files.push(fhandle);
+          // Skip macOS AppleDouble shadow files (._track.mp3) and other dotfiles —
+          // they match the extension but aren't real audio and always fail to load.
+          if (fhandle.kind === 'file' && !fname.startsWith('.') && /\.(mp3|wav|m4a|ogg)$/i.test(fname)) {
+            files.push(fhandle);
+          }
         }
         playlistFiles[name] = files;
       }
@@ -229,9 +233,14 @@ function shuffle(arr) {
 }
 
 let playToken = 0;
+let previousMusicUrl = null;
 
-async function playNextTrack(queue, idx, playlistId, zone, token) {
+async function playNextTrack(queue, idx, playlistId, zone, token, failCount = 0) {
   if (token !== playToken || stopRequested) return;
+  if (failCount >= queue.length && queue.length > 0) {
+    log(`No playable files in "${playlistId}" — check for real audio files in that folder.`);
+    return;
+  }
   if (idx >= queue.length) {
     queue = shuffle(playlistFiles[playlistId] || []);
     idx = 0;
@@ -243,6 +252,8 @@ async function playNextTrack(queue, idx, playlistId, zone, token) {
 
   const url = URL.createObjectURL(file);
   musicAudio.pause();
+  if (previousMusicUrl) URL.revokeObjectURL(previousMusicUrl); // release the last track's memory
+  previousMusicUrl = url;
   musicAudio.src = url;
   musicAudio.onended = () => playNextTrack(queue, idx + 1, playlistId, zone, token);
 
@@ -250,7 +261,7 @@ async function playNextTrack(queue, idx, playlistId, zone, token) {
     await musicAudio.play();
   } catch (err) {
     log(`Playback failed for "${file.name}" (${err.message || err}) — skipping to next track.`);
-    if (token === playToken) playNextTrack(queue, idx + 1, playlistId, zone, token);
+    if (token === playToken) playNextTrack(queue, idx + 1, playlistId, zone, token, failCount + 1);
     return;
   }
   if (token !== playToken) return; // superseded while play() was resolving
@@ -310,7 +321,21 @@ async function playClip(arrayBuffer) {
   const panner = rxCtx.createStereoPanner();
   panner.pan.value = zoneToPan(zone);
   source.connect(gain).connect(compressor).connect(panner).connect(mixBus);
-  audioEl.play().catch((err) => log(`Push-to-talk clip failed to play (${err.message || err})`));
+
+  const cleanup = () => {
+    URL.revokeObjectURL(url);
+    source.disconnect();
+    gain.disconnect();
+    compressor.disconnect();
+    panner.disconnect();
+  };
+  audioEl.addEventListener('ended', cleanup);
+  audioEl.addEventListener('error', cleanup);
+
+  audioEl.play().catch((err) => {
+    log(`Push-to-talk clip failed to play (${err.message || err})`);
+    cleanup();
+  });
   log(`Push-to-talk clip played (${zone})`);
 }
 
