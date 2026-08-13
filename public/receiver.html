@@ -53,6 +53,20 @@
         <input type="range" id="mic-max" min="0" max="100" value="100" />
       </div>
 
+      <p style="font-size:13px;color:var(--text-secondary);margin:1rem 0 10px;">
+        Independent volume per physical speaker channel — e.g. quieter inside, louder
+        outside, at the same time, regardless of which zone was selected when something
+        was triggered.
+      </p>
+      <div class="slider-row">
+        <div class="row-top"><label>Pool channel volume</label><span class="value" id="pool-chan-val">100</span></div>
+        <input type="range" id="pool-chan" min="0" max="100" value="100" />
+      </div>
+      <div class="slider-row">
+        <div class="row-top"><label>Pool house channel volume</label><span class="value" id="poolhouse-chan-val">100</span></div>
+        <input type="range" id="poolhouse-chan" min="0" max="100" value="100" />
+      </div>
+
       <p style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;">
         Pick the parent folder that contains one subfolder per playlist
         (e.g. <code>summer-mix</code>, <code>lifeguard-picks</code>). Files play straight off
@@ -73,17 +87,58 @@
 let folderHandle = null;
 let playlistFiles = {};
 let musicAudio = new Audio();
-let musicPanner, musicGain, musicSource, musicCtx;
-let clipCtx;
+let musicPanner, musicGain, musicSource;
 let currentPlaylist = null;
 let currentZone = 'both';
 let stopRequested = false;
 
+// ---------- shared audio graph ----------
+// One AudioContext for everything (music + push-to-talk clips), so both can be
+// routed through the same per-channel volume stage. Signal flow per source:
+// source -> gain (volume) -> [compressor for clips] -> panner (zone) -> mixBus
+// mixBus -> splitter -> poolGain / poolhouseGain -> merger -> speakers
+let audioCtx, mixBus, splitter, poolGain, poolhouseGain, merger, graphReady = false;
+
+function ensureAudioGraph() {
+  if (graphReady) return;
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  mixBus = audioCtx.createGain();
+  mixBus.gain.value = 1;
+  splitter = audioCtx.createChannelSplitter(2);
+  poolGain = audioCtx.createGain();
+  poolhouseGain = audioCtx.createGain();
+  poolGain.gain.value = poolChanLevel;
+  poolhouseGain.gain.value = poolhouseChanLevel;
+  merger = audioCtx.createChannelMerger(2);
+
+  mixBus.connect(splitter);
+  splitter.connect(poolGain, 0);
+  splitter.connect(poolhouseGain, 1);
+  poolGain.connect(merger, 0, 0);
+  poolhouseGain.connect(merger, 0, 1);
+  merger.connect(audioCtx.destination);
+
+  graphReady = true;
+}
+
+function ensureMusicGraph() {
+  ensureAudioGraph();
+  if (musicSource) return;
+  musicSource = audioCtx.createMediaElementSource(musicAudio);
+  musicGain = audioCtx.createGain();
+  musicGain.gain.value = effectiveMusicGain();
+  musicPanner = audioCtx.createStereoPanner();
+  musicSource.connect(musicGain).connect(musicPanner).connect(mixBus);
+}
+
+// ---------- volume state ----------
 let musicVolLevel = 0.7;
 let micVolLevel = 0.7;
 let micAmpLevel = 0.2;
 let musicMaxLevel = 1.0;
 let micMaxLevel = 1.0;
+let poolChanLevel = 1.0;
+let poolhouseChanLevel = 1.0;
 
 function effectiveMusicGain() { return musicVolLevel * musicMaxLevel; }
 function effectiveMicGain() { return micVolLevel * micMaxLevel * (1 + micAmpLevel * 4); }
@@ -110,6 +165,16 @@ document.getElementById('mic-max').addEventListener('input', (e) => {
   micMaxLevel = e.target.value / 100;
   document.getElementById('mic-max-val').textContent = e.target.value;
 });
+document.getElementById('pool-chan').addEventListener('input', (e) => {
+  poolChanLevel = e.target.value / 100;
+  document.getElementById('pool-chan-val').textContent = e.target.value;
+  if (poolGain) poolGain.gain.value = poolChanLevel;
+});
+document.getElementById('poolhouse-chan').addEventListener('input', (e) => {
+  poolhouseChanLevel = e.target.value / 100;
+  document.getElementById('poolhouse-chan-val').textContent = e.target.value;
+  if (poolhouseGain) poolhouseGain.gain.value = poolhouseChanLevel;
+});
 
 function log(msg) {
   const el = document.getElementById('log');
@@ -120,13 +185,22 @@ function log(msg) {
   while (el.children.length > 25) el.removeChild(el.lastChild);
 }
 
+// Pool/pool house were wired to the opposite amp channels from what the app
+// originally assumed — swapped here in software so the physical wiring
+// doesn't need to be touched.
 function zoneToPan(zone) {
-  if (zone === 'pool') return -1;
-  if (zone === 'poolhouse') return 1;
+  if (zone === 'pool') return 1;
+  if (zone === 'poolhouse') return -1;
   return 0;
 }
 
 document.getElementById('pick-folder').addEventListener('click', async () => {
+  // This click is a real user gesture, so use it to unlock audio playback for
+  // the rest of the session — without this, browsers can intermittently block
+  // audio that starts from a remote WebSocket trigger rather than a tap here.
+  ensureMusicGraph();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
   try {
     folderHandle = await window.showDirectoryPicker();
     playlistFiles = {};
@@ -154,8 +228,10 @@ function shuffle(arr) {
   return a;
 }
 
-async function playNextTrack(queue, idx, playlistId, zone) {
-  if (stopRequested || currentPlaylist !== playlistId) return;
+let playToken = 0;
+
+async function playNextTrack(queue, idx, playlistId, zone, token) {
+  if (token !== playToken || stopRequested) return;
   if (idx >= queue.length) {
     queue = shuffle(playlistFiles[playlistId] || []);
     idx = 0;
@@ -163,10 +239,22 @@ async function playNextTrack(queue, idx, playlistId, zone) {
   }
   const fileHandle = queue[idx];
   const file = await fileHandle.getFile();
+  if (token !== playToken) return; // a newer play/stop happened while this was loading
+
   const url = URL.createObjectURL(file);
+  musicAudio.pause();
   musicAudio.src = url;
-  musicAudio.onended = () => playNextTrack(queue, idx + 1, playlistId, zone);
-  await musicAudio.play().catch(() => {});
+  musicAudio.onended = () => playNextTrack(queue, idx + 1, playlistId, zone, token);
+
+  try {
+    await musicAudio.play();
+  } catch (err) {
+    log(`Playback failed for "${file.name}" (${err.message || err}) — skipping to next track.`);
+    if (token === playToken) playNextTrack(queue, idx + 1, playlistId, zone, token);
+    return;
+  }
+  if (token !== playToken) return; // superseded while play() was resolving
+
   document.getElementById('now-playing').textContent = `${playlistId} — ${file.name}`;
   document.getElementById('now-zone').textContent = `Zone: ${zone}`;
   sendControlMessage({ type: 'nowPlaying', playlist: playlistId, track: file.name, zone });
@@ -183,29 +271,22 @@ async function startPlaylist(playlistId, zone, mode) {
   currentPlaylist = playlistId;
   currentZone = zone;
   stopRequested = false;
+  playToken += 1;
+  const token = playToken;
   const queue = shuffle(playlistFiles[playlistId]);
   log(`Playing "${playlistId}" to ${zone} (shuffle, loop)`);
-  playNextTrack(queue, 0, playlistId, zone);
+  playNextTrack(queue, 0, playlistId, zone, token);
 }
 
 function stopPlaylist() {
   stopRequested = true;
+  playToken += 1; // invalidates any in-flight play chain so it can't resurrect after this
   currentPlaylist = null;
   musicAudio.pause();
   document.getElementById('now-playing').textContent = 'Nothing playing';
   document.getElementById('now-zone').textContent = '-';
   log('Music stopped');
   sendControlMessage({ type: 'stopped' });
-}
-
-function ensureMusicGraph() {
-  if (musicSource) return;
-  musicCtx = musicCtx || new (window.AudioContext || window.webkitAudioContext)();
-  musicSource = musicCtx.createMediaElementSource(musicAudio);
-  musicGain = musicCtx.createGain();
-  musicGain.gain.value = effectiveMusicGain();
-  musicPanner = musicCtx.createStereoPanner();
-  musicSource.connect(musicGain).connect(musicPanner).connect(musicCtx.destination);
 }
 
 const ZONE_NAME = { 0: 'pool', 1: 'poolhouse', 2: 'both' };
@@ -218,18 +299,18 @@ async function playClip(arrayBuffer) {
   const audioBytes = bytes.slice(2 + mimeLen);
   const zone = ZONE_NAME[zoneByte] || 'both';
 
-  clipCtx = clipCtx || new (window.AudioContext || window.webkitAudioContext)();
+  ensureAudioGraph();
   const blob = new Blob([audioBytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const audioEl = new Audio(url);
-  const source = clipCtx.createMediaElementSource(audioEl);
-  const gain = clipCtx.createGain();
+  const source = audioCtx.createMediaElementSource(audioEl);
+  const gain = audioCtx.createGain();
   gain.gain.value = effectiveMicGain();
-  const compressor = clipCtx.createDynamicsCompressor();
-  const panner = clipCtx.createStereoPanner();
+  const compressor = audioCtx.createDynamicsCompressor();
+  const panner = audioCtx.createStereoPanner();
   panner.pan.value = zoneToPan(zone);
-  source.connect(gain).connect(compressor).connect(panner).connect(clipCtx.destination);
-  audioEl.play();
+  source.connect(gain).connect(compressor).connect(panner).connect(mixBus);
+  audioEl.play().catch((err) => log(`Push-to-talk clip failed to play (${err.message || err})`));
   log(`Push-to-talk clip played (${zone})`);
 }
 
